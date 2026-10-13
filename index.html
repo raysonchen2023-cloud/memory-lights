@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>記憶節奏燈</title>
+<style>
+  :root {
+    --bg: #12141c;
+    --panel: #1c1f2b;
+    --text: #e8eaf2;
+    --muted: #8a90a6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+  }
+  h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.1em; }
+  .scores { display: flex; gap: 16px; }
+  .score {
+    min-width: 110px;
+    padding: 10px 16px;
+    border-radius: 12px;
+    background: var(--panel);
+    text-align: center;
+  }
+  .score span { display: block; font-size: 0.8rem; color: var(--muted); }
+  .score strong { font-size: 1.8rem; font-variant-numeric: tabular-nums; }
+
+  .board {
+    position: relative;
+    width: min(80vw, 380px);
+    aspect-ratio: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .pad {
+    border: none;
+    border-radius: 24px;
+    background: var(--c);
+    opacity: 0.35;
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 600;
+    color: rgba(0, 0, 0, 0.45);
+    transition: opacity 0.12s, transform 0.12s, box-shadow 0.12s;
+  }
+  .pad:nth-child(1) { --c: #3ddc84; border-top-left-radius: 100%; }
+  .pad:nth-child(2) { --c: #ff5c5c; border-top-right-radius: 100%; }
+  .pad:nth-child(3) { --c: #ffd23f; border-bottom-left-radius: 100%; }
+  .pad:nth-child(4) { --c: #4da3ff; border-bottom-right-radius: 100%; }
+  .pad.lit {
+    opacity: 1;
+    transform: scale(1.03);
+    box-shadow: 0 0 40px var(--c);
+  }
+  .board.locked .pad { cursor: default; }
+
+  #start {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 34%;
+    aspect-ratio: 1;
+    transform: translate(-50%, -50%);
+    border: 6px solid var(--bg);
+    border-radius: 50%;
+    background: var(--panel);
+    color: var(--text);
+    font: inherit;
+    font-size: 1.05rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #start:hover { background: #262a3a; }
+
+  #status { min-height: 1.5em; margin: 0; font-size: 1.05rem; }
+  .hint { margin: 0; font-size: 0.85rem; color: var(--muted); }
+  kbd {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--panel);
+    font-family: inherit;
+  }
+</style>
+</head>
+<body>
+  <h1>記憶節奏燈</h1>
+
+  <div class="scores">
+    <div class="score"><span>回合</span><strong id="round">0</strong></div>
+    <div class="score"><span>最高紀錄</span><strong id="best">0</strong></div>
+  </div>
+
+  <div class="board locked" id="board">
+    <button class="pad" data-i="0">Q</button>
+    <button class="pad" data-i="1">W</button>
+    <button class="pad" data-i="2">A</button>
+    <button class="pad" data-i="3">S</button>
+    <button id="start">開始</button>
+  </div>
+
+  <p id="status">按「開始」，記住燈亮的順序</p>
+  <p class="hint">滑鼠點擊，或用鍵盤 <kbd>Q</kbd> <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd>；<kbd>空白鍵</kbd> 開始</p>
+
+<script>
+const TONES = [329.63, 261.63, 220.0, 164.81]; // E4, C4, A3, E3
+const KEYS = { q: 0, w: 1, a: 2, s: 3 };
+const BEST_KEY = 'memory-lights-best';
+
+const board = document.getElementById('board');
+const pads = [...document.querySelectorAll('.pad')];
+const startBtn = document.getElementById('start');
+const statusEl = document.getElementById('status');
+const roundEl = document.getElementById('round');
+const bestEl = document.getElementById('best');
+
+let seq = [];
+let pos = 0;
+let accepting = false;
+let run = 0; // 每次重新開始就 +1，用來中止舊的播放
+let best = 0;
+let audio = null;
+
+try { best = Number(localStorage.getItem(BEST_KEY)) || 0; } catch {}
+bestEl.textContent = best;
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function beep(freq, ms, type = 'sine') {
+  if (!audio) return;
+  const osc = audio.createOscillator();
+  const gain = audio.createGain();
+  const now = audio.currentTime;
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0.25, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + ms / 1000);
+  osc.connect(gain).connect(audio.destination);
+  osc.start(now);
+  osc.stop(now + ms / 1000);
+}
+
+async function flash(i, ms) {
+  pads[i].classList.add('lit');
+  beep(TONES[i], ms);
+  await sleep(ms);
+  pads[i].classList.remove('lit');
+}
+
+function setAccepting(on) {
+  accepting = on;
+  board.classList.toggle('locked', !on);
+}
+
+async function playRound(myRun) {
+  setAccepting(false);
+  seq.push(Math.floor(Math.random() * 4));
+  pos = 0;
+  roundEl.textContent = seq.length;
+  statusEl.textContent = '仔細看…';
+  // 序列越長播得越快
+  const ms = Math.max(220, 520 - seq.length * 20);
+  await sleep(600);
+  for (const i of seq) {
+    if (myRun !== run) return;
+    await flash(i, ms);
+    await sleep(ms * 0.3);
+  }
+  if (myRun !== run) return;
+  statusEl.textContent = '換你了！';
+  setAccepting(true);
+}
+
+function start() {
+  if (!audio) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) audio = new Ctx();
+  }
+  run++;
+  seq = [];
+  pads.forEach(p => p.classList.remove('lit'));
+  startBtn.textContent = '重來';
+  playRound(run);
+}
+
+async function gameOver() {
+  const myRun = ++run;
+  setAccepting(false);
+  const score = seq.length - 1;
+  beep(90, 700, 'sawtooth');
+  pads.forEach(p => p.classList.add('lit'));
+  await sleep(500);
+  if (myRun !== run) return;
+  pads.forEach(p => p.classList.remove('lit'));
+  if (score > best) {
+    best = score;
+    bestEl.textContent = best;
+    try { localStorage.setItem(BEST_KEY, best); } catch {}
+    statusEl.textContent = `新紀錄！完成了 ${score} 回合 🎉`;
+  } else {
+    statusEl.textContent = `答錯了，完成了 ${score} 回合。再來一次？`;
+  }
+  startBtn.textContent = '開始';
+}
+
+function press(i) {
+  if (!accepting) return;
+  if (i !== seq[pos]) { gameOver(); return; }
+  flash(i, 200);
+  pos++;
+  if (pos === seq.length) {
+    setAccepting(false);
+    statusEl.textContent = '答對了！';
+    const myRun = run;
+    setTimeout(() => { if (myRun === run) playRound(myRun); }, 700);
+  }
+}
+
+pads.forEach(p => p.addEventListener('click', () => press(Number(p.dataset.i))));
+startBtn.addEventListener('click', start);
+document.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  const k = e.key.toLowerCase();
+  if (k in KEYS) press(KEYS[k]);
+  else if (e.code === 'Space') { e.preventDefault(); start(); }
+});
+// 避免空白鍵放開時又「點擊」到目前聚焦的按鈕
+document.addEventListener('keyup', e => {
+  if (e.code === 'Space') e.preventDefault();
+});
+</script>
+</body>
+</html>
